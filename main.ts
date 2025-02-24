@@ -32,24 +32,35 @@ const db = new Kysely<DB>({
   },
 });
 
-interface Query<T> {
-  (creator: QueryCreator<DB>): SelectQueryBuilder<DB, any, T>;
+
+// introduce 2 new type parameters
+// D: the type of the database that gets augmented with each call to with
+// T the key of the DB type that is being selected from, e.g. DB["people"]
+interface Query<D extends DB, K extends keyof D> {
+  (creator: QueryCreator<D>): SelectQueryBuilder<D, K, D[K]>;
 }
 
-const charlesses: Query<Person> = ({ selectFrom }) =>
+
+const charlesses: Query<DB, "people"> = ({ selectFrom }) =>
   selectFrom("people").where("name", "=", "Charles").selectAll();
 
-const pauls: Query<Person> = ({ selectFrom }) =>
+
+// The first call to `with("charles", charlesses)`
+// returns a new db type with: { charles: Person } augmented to DB, i.e. DB & { charles: Person }.
+//
+// When the second `.with("pauls", pauls)` is called, the expected function signature
+// is now (creator: QueryCreator<DB & { charles: Person }> => ret
+//
+// However, `pauls` was originally typed as Query<Person, DB>, which expects QueryCreator<DB>.
+// This creates a type mismatch because QueryCreator<DB> is not assignable to QueryCreator<DB & { charles: Person }>.
+//
+// To fix this, we explicitly define `pauls` as Query<DB & { charles: Person }, "people">, 
+// ensuring it aligns with the extended DB type returned by the first `with` call.
+const pauls: Query<DB & { charles: Person }, "people"> = ({ selectFrom }) =>
   selectFrom("people").where("name", "=", "Paul").selectAll();
-
-// this works because () => pauls(db) delays execution
-// db.with("charles", charlesses) does not modify db itself; it returns a new Kysely instance with an extended type
-// if pauls is passed directly, it would be checked against the original db, which does not include { charles: Person }, causing a type mismatch
-// wrapping pauls(db) in a function ensures it is evaluated with the new instance that includes { charles: Person }, making it compatible
-db.with("charles", charlesses).with("pauls", () => pauls(db));
-
-// this fails because pauls is explicitly typed as Query<Person>, which means it expects QueryCreator<DB>
-// however, db.with("charles", charlesses) does not modify db but instead returns a new Kysely instance with an extended type
-// when pauls is passed directly, it is still expecting QueryCreator<DB>, but it is now being used with Kysely<DB & { charles: Person }>
-// this causes a type mismatch because QueryCreator<DB> is not assignable to QueryCreator<DB & { charles: Person }>
+//
+// This makes everything type-check correctly.
 db.with("charles", charlesses).with("pauls", pauls);
+
+// The main problem is that the argument passed to the `pauls` function is an augmented type that comes from the previous db.with("charles", charlesses) call,
+// the `with` function returns a `QueryCreatorWithCommonTableExpression<DB, N, E>`, so you might be able to use that to extract the correct type
